@@ -16,7 +16,7 @@ Node.js service that receives Dialpad call webhooks and syncs call data into Les
 ### 1. Install dependencies
 
 ```bash
-cd e:\CRM-helpisatyourhand
+cd dialpad-crm
 npm install
 ```
 
@@ -37,8 +37,9 @@ CRM_ASSIGNED_TO=123456
 PORT=3000
 ```
 
-- **CRM_API_KEY** / **CRM_USER_CODE**: Less Annoying CRM → **Settings → Programmer API** (create a key with permissions for contacts and notes).
-- **CRM_ASSIGNED_TO**: LAC User ID that new contacts will be assigned to (required when creating contacts). Find your User ID in LAC under Settings → Users, or via the API.
+- **CRM_API_KEY** / **CRM_USER_CODE**: Less Annoying CRM → **Settings → Programmer API** (create a key with permissions for contacts and notes). For the v2 API (default), only `CRM_API_KEY` is used (in the Authorization header).
+- **CRM_ASSIGNED_TO**: LAC User ID that new contacts will be assigned to (required when creating contacts). Find your User ID in LAC under **Settings → Users** (must be a User ID your API key is allowed to assign to).
+- **CRM_API_VERSION**: Optional. `v2` (default) = POST to `/v2/` with `Authorization: CRM_API_KEY`. `v1` = legacy body auth with `UserCode` and `APIToken`.
 
 ### 3. Run the server
 
@@ -47,6 +48,58 @@ npm start
 ```
 
 Server listens on `http://0.0.0.0:3000` (or the port in `PORT`).
+
+## Deploy to VPS (31.220.94.61)
+
+Once the app is on your VPS with `.env` configured (including `PUBLIC_WEBHOOK_URL=http://31.220.94.61:3000`):
+
+### 1. Open firewall (so Dialpad can reach the webhook)
+
+```bash
+# Ubuntu/Debian with ufw
+sudo ufw allow 3000/tcp
+sudo ufw status
+sudo ufw enable   # if not already enabled
+```
+
+### 2. Run with PM2 (restart on crash and reboot)
+
+```bash
+npm install -g pm2
+pm2 start server.js --name dialpad-crm-webhook
+pm2 save
+pm2 startup   # run the command it prints to enable on boot
+```
+
+### 3. Register the webhook with Dialpad (one-time)
+
+From the project root (on the VPS or from your machine with the same `.env`):
+
+```bash
+node scripts/register-dialpad-webhook.js
+```
+
+IDs are saved to `dialpad-webhook-ids.json`.
+
+### 4. Verify
+
+- Health: `curl http://31.220.94.61:3000/health`
+- Make a test call in Dialpad, then check `logs/webhook.log` and the CRM for the new note.
+
+### 5. Dialpad requires HTTPS
+
+Dialpad’s API rejects `http://` webhook URLs. To finish registration you need either:
+
+- **Option A:** A domain pointing at this VPS, then Nginx (or Caddy) + Let’s Encrypt, and set `PUBLIC_WEBHOOK_URL=https://your-domain.com` before running `node scripts/register-dialpad-webhook.js`.
+- **Option B:** A tunnel (e.g. ngrok) with an `https://` URL; set `PUBLIC_WEBHOOK_URL` to that URL and run the registration script.
+
+### 6. PM2 on reboot
+
+Run the command that `pm2 startup` printed (with `sudo`) so the app restarts on reboot. Example:
+
+```bash
+sudo env PATH=$PATH:/home/odmin/.nvm/versions/node/v22.21.1/bin /home/odmin/.nvm/versions/node/v22.21.1/lib/node_modules/pm2/bin/pm2 startup systemd -u odmin --hp /home/odmin
+```
 
 ## Dialpad webhook configuration (API v2)
 
@@ -121,6 +174,18 @@ Make a test call in Dialpad and check your server logs (`logs/webhook.log`) and 
 4. If no contact exists, it creates one with that phone.
 5. It adds a note to the contact with call type, transcript URL, and recording URL.
 6. Server responds `200 OK` to Dialpad.
+
+## Testing the CRM connection
+
+Run the standalone CRM test script (uses `.env` credentials):
+
+```bash
+node test-crm-api.js
+```
+
+Optional: pass a phone number to search for: `node test-crm-api.js +61475410214`
+
+This tests **GetContacts**, then (if `CRM_ASSIGNED_TO` is set) **CreateContact** and **CreateNote**. If you see "You do not have permission to assign contacts to UserId X", set `CRM_ASSIGNED_TO` to your actual LAC User ID from **Settings → Users**.
 
 ## Testing locally
 
